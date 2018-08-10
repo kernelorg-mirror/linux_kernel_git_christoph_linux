@@ -5059,6 +5059,57 @@ static void build_zonelists(pg_data_t *pgdat)
 
 #endif	/* CONFIG_NUMA */
 
+int set_page_order_min(int node, int order, unsigned min)
+{
+	int i, o;
+	long min_pages = 0;			/* Pages already reserved */
+	long managed_pages = 0;			/* Pages managed on the node */
+	struct zone *last = NULL;
+	unsigned remaining;
+
+	/*
+	 * Determine already reserved memory for orders
+	 * plus the total of the pages on the node
+	 */
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		struct zone *z = &NODE_DATA(node)->node_zones[i];
+		if (managed_zone(z)) {
+			for (o = 0; o < MAX_ORDER; o++) {
+				if (o != order)
+					min_pages += z->free_area[o].min << o;
+
+			}
+			managed_pages += z->managed_pages;
+		}
+	}
+
+	if (min_pages + (min << order) > managed_pages / 2)
+		return -ENOMEM;
+
+	/* Set the min values for all zones on the node */
+	remaining = min;
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		struct zone *z = &NODE_DATA(node)->node_zones[i];
+		if (managed_zone(z)) {
+			u64 tmp;
+
+			tmp = (u64)z->managed_pages * (min << order);
+			do_div(tmp, managed_pages);
+			tmp >>= order;
+			z->free_area[order].min = tmp;
+
+			last = z;
+			remaining -= tmp;
+		}
+	}
+
+	/* Deal with rounding errors */
+	if (remaining && last)
+		last->free_area[order].min += remaining;
+
+	return 0;
+}
+
 /*
  * Boot pageset table. One per cpu which is going to be used for all
  * zones and all nodes. The parameters will be set in such a way
@@ -5205,6 +5256,114 @@ void __ref build_all_zonelists(pg_data_t *pgdat)
 	pr_info("Policy zone: %s\n", zone_names[policy_zone]);
 #endif
 }
+
+/*
+ * Initially all pages are reserved - free ones are freed
+ * up by free_all_bootmem() once the early boot process is
+ * done. Non-atomic initialization, single-pass.
+ */
+void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
+		unsigned long start_pfn, enum memmap_context context,
+		struct vmem_altmap *altmap)
+{
+	unsigned long end_pfn = start_pfn + size;
+	pg_data_t *pgdat = NODE_DATA(nid);
+	unsigned long pfn;
+	unsigned long nr_initialised = 0;
+	struct page *page;
+#ifdef CONFIG_HAVE_MEMBLOCK_NODE_MAP
+	struct memblock_region *r = NULL, *tmp;
+#endif
+
+	if (highest_memmap_pfn < end_pfn - 1)
+		highest_memmap_pfn = end_pfn - 1;
+
+	/*
+	 * Honor reservation requested by the driver for this ZONE_DEVICE
+	 * memory
+	 */
+	if (altmap && start_pfn == altmap->base_pfn)
+		start_pfn += altmap->reserve;
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		/*
+		 * There can be holes in boot-time mem_map[]s handed to this
+		 * function.  They do not exist on hotplugged memory.
+		 */
+		if (context != MEMMAP_EARLY)
+			goto not_early;
+
+		if (!early_pfn_valid(pfn))
+			continue;
+		if (!early_pfn_in_nid(pfn, nid))
+			continue;
+		if (!update_defer_init(pgdat, pfn, end_pfn, &nr_initialised))
+			break;
+
+#ifdef CONFIG_HAVE_MEMBLOCK_NODE_MAP
+		/*
+		 * Check given memblock attribute by firmware which can affect
+		 * kernel memory layout.  If zone==ZONE_MOVABLE but memory is
+		 * mirrored, it's an overlapped memmap init. skip it.
+		 */
+		if (mirrored_kernelcore && zone == ZONE_MOVABLE) {
+			if (!r || pfn >= memblock_region_memory_end_pfn(r)) {
+				for_each_memblock(memory, tmp)
+					if (pfn < memblock_region_memory_end_pfn(tmp))
+						break;
+				r = tmp;
+			}
+			if (pfn >= memblock_region_memory_base_pfn(r) &&
+			    memblock_is_mirror(r)) {
+				/* already initialized as NORMAL */
+				pfn = memblock_region_memory_end_pfn(r);
+				continue;
+			}
+		}
+#endif
+
+not_early:
+		page = pfn_to_page(pfn);
+		__init_single_page(page, pfn, zone, nid);
+		if (context == MEMMAP_HOTPLUG)
+			SetPageReserved(page);
+
+		/*
+		 * Mark the block movable so that blocks are reserved for
+		 * movable at startup. This will force kernel allocations
+		 * to reserve their blocks rather than leaking throughout
+		 * the address space during boot when many long-lived
+		 * kernel allocations are made.
+		 *
+		 * bitmap is created for zone's valid pfn range. but memmap
+		 * can be created for invalid pages (for alignment)
+		 * check here not to call set_pageblock_migratetype() against
+		 * pfn out of zone.
+		 *
+		 * Please note that MEMMAP_HOTPLUG path doesn't clear memmap
+		 * because this is done early in sparse_add_one_section
+		 */
+		if (!(pfn & (pageblock_nr_pages - 1))) {
+			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
+			cond_resched();
+		}
+	}
+}
+
+static void __meminit zone_init_free_lists(struct zone *zone)
+{
+	unsigned int order, t;
+	for_each_migratetype_order(order, t) {
+		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
+		zone->free_area[order].nr_free = 0;
+		zone->free_area[order].min = 0;
+	}
+}
+
+#ifndef __HAVE_ARCH_MEMMAP_INIT
+#define memmap_init(size, nid, zone, start_pfn) \
+	memmap_init_zone((size), (nid), (zone), (start_pfn), MEMMAP_EARLY, NULL)
+#endif
 
 static int zone_batchsize(struct zone *zone)
 {

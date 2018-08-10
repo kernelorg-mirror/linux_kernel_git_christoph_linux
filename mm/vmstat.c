@@ -28,6 +28,7 @@
 #include <linux/mm_inline.h>
 #include <linux/page_owner.h>
 #include <linux/sched/isolation.h>
+#include <linux/ctype.h>
 
 #include "internal.h"
 
@@ -1712,8 +1713,61 @@ static ssize_t free_show(struct kobject *kobj,
 }
 OSTATE_ATTR_RO(free);
 
+static ssize_t protect_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	int nid;
+	int i;
+	int order;
+	unsigned long free = 0;
+	char zones[80];
+	char *p = zones;
+
+	order = kobj_to_order_node(kobj, &nid);
+
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		struct zone *z = &NODE_DATA(nid)->node_zones[i];
+		if (managed_zone(z)) {
+			unsigned long f = z->free_area[order].min;
+			free += f;
+			p += sprintf(p, "%s=%ld ", zone_names[zone_idx(z)], f);
+		}
+	}
+	p[-1] = 0;	/* Remove blank */
+
+	return sprintf(buf,"%lu (%s)\n", free, zones);
+}
+
+static ssize_t protect_store(struct kobject *kobj,
+	       struct kobj_attribute *attr,
+	       const char *buf, size_t length)
+{
+	int nid;
+	int order;
+	int err;
+	unsigned long min;
+
+	order = kobj_to_order_node(kobj, &nid);
+
+	err = kstrtoul(buf, 10, &min);
+
+	if (err)
+		return err;
+
+	if (min <= 0)
+		return -EINVAL;
+
+	err = set_page_order_min(nid, order, min);
+	if (err)
+		return err;
+
+	return length;
+}
+OSTATE_ATTR(protect);
+
 static struct attribute *order_attrs[] = {
 	&free_attr.attr,
+	&protect_attr.attr,
 	NULL,
 };
 

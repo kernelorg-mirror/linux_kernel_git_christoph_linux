@@ -111,6 +111,11 @@ extern int page_group_by_mobility_disabled;
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
+	/* We stop breaking up pages of this order if less than
+	 * min are available. At that point the pages can only
+	 * be used for allocations of that particular order.
+	 */
+	unsigned long		min;
 };
 
 struct pglist_data;
