@@ -5798,6 +5798,7 @@ static void __setup_per_zone_wmarks(void)
 	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
 	unsigned long lowmem_pages = 0;
 	struct zone *zone;
+	int order;
 	unsigned long flags;
 
 	/* Calculate total number of !ZONE_HIGHMEM and !ZONE_MOVABLE pages */
@@ -5812,7 +5813,11 @@ static void __setup_per_zone_wmarks(void)
 		spin_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		do_div(tmp, lowmem_pages);
-		if (is_highmem(zone) || zone_idx(zone) == ZONE_MOVABLE) {
+		if (is_highmem(zone)) {
+
+		for (order = 0; order < MAX_ORDER; order++)
+			tmp += ((u64)zone->free_area[order].min) << order;
+
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
 			 * need highmem and movable zones pages, so cap pages_min

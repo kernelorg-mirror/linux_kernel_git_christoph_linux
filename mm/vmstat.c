@@ -1761,6 +1761,7 @@ static ssize_t protect_store(struct kobject *kobj,
 	if (err)
 		return err;
 
+	setup_per_zone_wmarks();
 	return length;
 }
 OSTATE_ATTR(protect);
