@@ -599,6 +599,31 @@ static const struct attribute_group *node_dev_groups[] = {
 	NULL
 };
 
+static node_registration_func_t __vmstat_register_node;
+static node_registration_func_t __vmstat_unregister_node;
+
+static inline bool vmstat_register_node(struct node *node)
+{
+	if (__vmstat_register_node &&
+			node_state(node->dev.id, N_MEMORY)) {
+		__vmstat_register_node(node);
+		return true;
+	}
+	return false;
+}
+
+static inline void vmstat_unregister_node(struct node *node)
+{
+	if (__vmstat_unregister_node)
+		__vmstat_unregister_node(node);
+}
+
+void register_vmstat_with_node(node_registration_func_t doregister,
+				  node_registration_func_t unregister)
+{
+	__vmstat_register_node   = doregister;
+	__vmstat_unregister_node = unregister;
+}
 static void node_device_release(struct device *dev)
 {
 	kfree(to_node(dev));
@@ -625,6 +650,8 @@ static int register_node(struct node *node, int num)
 	} else {
 		hugetlb_register_node(node);
 		compaction_register_node(node);
+
+		vmstat_register_node(node);
 	}
 
 	return error;
@@ -643,6 +670,8 @@ void unregister_node(struct node *node)
 	compaction_unregister_node(node);
 	node_remove_accesses(node);
 	node_remove_caches(node);
+	vmstat_unregister_node(node);
+
 	device_unregister(&node->dev);
 }
 

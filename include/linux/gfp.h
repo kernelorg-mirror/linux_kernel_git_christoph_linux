@@ -137,6 +137,8 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	return z;
 }
 
+extern char * const zone_names[MAX_NR_ZONES];
+
 /*
  * There is only one page-allocator function, and two main namespaces to
  * it. The alloc_page*() variants return 'struct page *' and as such

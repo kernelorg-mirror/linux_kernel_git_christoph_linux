@@ -1655,6 +1655,162 @@ static const struct seq_operations pagetypeinfo_op = {
 	.show	= pagetypeinfo_show,
 };
 
+#ifdef CONFIG_NUMA
+static int kobj_to_order_node(struct kobject *kobj, int *nidp);
+/*
+ * Order information
+ */
+#define OSTATE_ATTR_RO(_name) \
+	static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+#define OSTATE_ATTR(_name) \
+	static struct kobj_attribute _name##_attr = \
+		__ATTR(_name, 0644, _name##_show, _name##_store)
+
+static ssize_t free_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	int nid;
+	int i,j;
+	int order;
+	unsigned long free = 0;
+	char zones[80];
+	char *p = zones;
+	char mig[80];
+	char *q = mig;
+
+	order = kobj_to_order_node(kobj, &nid);
+
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		struct zone *z = &NODE_DATA(nid)->node_zones[i];
+		if (managed_zone(z)) {
+			unsigned long f = z->free_area[order].nr_free;
+			free += f;
+			p += sprintf(p, "%s=%ld ", zone_names[zone_idx(z)], f);
+		}
+	}
+	p[-1] = 0;	/* Remove blank */
+
+	for (i = 0; i < MIGRATE_TYPES; i++) {
+		unsigned long count = 0;
+
+		for (j = 0; j < MAX_NR_ZONES; j++) {
+			struct zone *z = &NODE_DATA(nid)->node_zones[j];
+			if (managed_zone(z)) {
+				struct list_head *l;
+
+				list_for_each(l, &z->free_area[order].free_list[i])
+						count++;
+
+			}
+		}
+		q += sprintf(q, "%s=%ld ", migratetype_names[i], count);
+	}
+	q[-1] = 0;
+
+	return sprintf(buf,"%lu (%s) (%s)\n", free, zones, mig);
+}
+OSTATE_ATTR_RO(free);
+
+static struct attribute *order_attrs[] = {
+	&free_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group order_state_attr_group = {
+	.attrs = order_attrs,
+};
+
+struct node_order_state {
+	struct kobject *kobj;
+	struct {
+		struct kobject *order;
+		char kb[10];
+	} orders[MAX_ORDER];
+};
+
+static struct node_order_state node_order_states[MAX_NUMNODES];
+
+static int kobj_to_order_node(struct kobject *kobj, int *nidp)
+{
+	int order;
+	int node;
+
+	for (node = 0; node < nr_node_ids; node++) {
+		struct node_order_state *nos = &node_order_states[node];
+
+		for (order = 0; order < MAX_ORDER; order++)
+			if (nos->orders[order].order == kobj) {
+				if (nidp)
+					*nidp = node;
+				return order;
+			}
+	}
+	BUG();
+	return -1;
+}
+
+static void order_unregister_node(struct node *node)
+{
+	struct node_order_state *nos = &node_order_states[node->dev.id];
+	int order;
+
+	for (order = 0; order < MAX_ORDER; order++) {
+		kobject_put(nos->orders[order].order);
+		nos->orders[order].order = NULL;
+	}
+	kobject_put(nos->kobj);
+	nos->kobj = NULL;
+}
+
+static void order_register_node(struct node *node)
+{
+	struct node_order_state *nos = &node_order_states[node->dev.id];
+	int order;
+
+	if (nos->kobj)
+		return;
+
+	nos->kobj = kobject_create_and_add("pagesize", &node->dev.kobj);
+
+	for (order = 0; order < MAX_ORDER; order++) {
+			int r;
+
+			sprintf(nos->orders[order].kb, "%ldkb",
+				       (PAGE_SIZE << order) / 1024);
+
+			nos->orders[order].order =
+				kobject_create_and_add(nos->orders[order].kb,
+					       nos->kobj);
+
+			r = sysfs_create_group(nos->orders[order].order, &order_state_attr_group);
+			if (r) {
+				kobject_put(nos->orders[order].order);
+				printk(KERN_ERR "Unable to add order sysfs directory node %d order %d\n",
+					       node->dev.id, order);
+			}
+	}
+}
+
+static int __init order_init(void)
+{
+	int nid;
+
+	for_each_node_state(nid, N_MEMORY) {
+		struct node *node = node_devices[nid];
+
+		if (node->dev.id == nid)
+			order_register_node(node);
+
+	}
+	register_vmstat_with_node(order_register_node,
+			order_unregister_node);
+
+	return 0;
+}
+subsys_initcall(order_init)
+#endif
+
 static bool is_zone_first_populated(pg_data_t *pgdat, struct zone *zone)
 {
 	int zid;
