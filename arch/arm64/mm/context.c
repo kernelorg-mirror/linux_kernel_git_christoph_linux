@@ -735,6 +735,67 @@ out:
 	mmu_notifier_arch_invalidate_secondary_tlbs(vma->vm_mm, start, end);
 }
 
+static void inline flush_tlb_pre_kernel(void)
+{
+	flush_tlb_pre(TLB_BROADCAST);
+}
+
+static void inline flush_tlb_post_kernel(void)
+{
+	flush_tlb_post(TLB_BROADCAST);
+	isb();
+}
+
+void local_flush_tlb_all(void)
+{
+	flush_tlb_pre(TLB_LOCAL);
+	__tlbi(vmalle1);
+	flush_tlb_post(TLB_LOCAL);
+	isb();
+	count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+}
+
+void flush_tlb_all(void)
+{
+	flush_tlb_pre_kernel();
+	__tlbi(vmalle1is);
+	flush_tlb_post_kernel();
+	count_vm_tlb_event(NR_TLB_FLUSH_ALL);
+}
+
+void flush_tlb_kernel_range(unsigned long start, unsigned long end)
+{
+	unsigned long addr;
+
+	if ((end - start) > (MAX_DVM_OPS * PAGE_SIZE)) {
+		flush_tlb_all();
+		return;
+	}
+
+	start = __TLBI_VADDR(start, 0);
+	end = __TLBI_VADDR(end, 0);
+
+	flush_tlb_pre_kernel();
+	for (addr = start; addr < end; addr += 1 << (PAGE_SHIFT - 12)) {
+		__tlbi(vaale1is, addr);
+	}
+	flush_tlb_post_kernel();
+}
+
+/*
+ * Used to invalidate the TLB (walk caches) corresponding to intermediate page
+ * table levels (pgd/pud/pmd).
+ */
+void __flush_tlb_kernel_pgtable(unsigned long kaddr)
+{
+	unsigned long addr = __TLBI_VADDR(kaddr, 0);
+
+	flush_tlb_pre_kernel();
+	__tlbi(vaae1is, addr);
+	flush_tlb_post_kernel();
+}
+
+
 static ssize_t tlb_mode_read_file(struct file *file, char __user *user_buf,
 				size_t count, loff_t *ppos)
 {

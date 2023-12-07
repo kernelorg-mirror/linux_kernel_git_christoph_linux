@@ -232,23 +232,9 @@ static inline unsigned long get_trans_granule(void)
  *	on top of these routines, since that is our interface to the mmu_gather
  *	API as used by munmap() and friends.
  */
-static inline void local_flush_tlb_all(void)
-{
-	dsb(nshst);
-	__tlbi(vmalle1);
-	dsb(nsh);
-	isb();
-	_count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
-}
+void local_flush_tlb_all(void);
 
-static inline void flush_tlb_all(void)
-{
-	dsb(ishst);
-	__tlbi(vmalle1is);
-	dsb(ish);
-	isb();
-	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
-}
+void flush_tlb_all(void);
 
 void flush_tlb_mm(struct mm_struct *mm);
 
@@ -409,38 +395,13 @@ static inline void flush_tlb_range(struct vm_area_struct *vma,
 	__flush_tlb_range(vma, start, end, PAGE_SIZE, false, 0);
 }
 
-static inline void flush_tlb_kernel_range(unsigned long start, unsigned long end)
-{
-	unsigned long addr;
-
-	if ((end - start) > (MAX_DVM_OPS * PAGE_SIZE)) {
-		flush_tlb_all();
-		return;
-	}
-
-	start = __TLBI_VADDR(start, 0);
-	end = __TLBI_VADDR(end, 0);
-
-	dsb(ishst);
-	for (addr = start; addr < end; addr += 1 << (PAGE_SHIFT - 12))
-		__tlbi(vaale1is, addr);
-	dsb(ish);
-	isb();
-}
+void flush_tlb_kernel_range(unsigned long start, unsigned long end);
 
 /*
  * Used to invalidate the TLB (walk caches) corresponding to intermediate page
  * table levels (pgd/pud/pmd).
  */
-static inline void __flush_tlb_kernel_pgtable(unsigned long kaddr)
-{
-	unsigned long addr = __TLBI_VADDR(kaddr, 0);
-
-	dsb(ishst);
-	__tlbi(vaae1is, addr);
-	dsb(ish);
-	isb();
-}
+void __flush_tlb_kernel_pgtable(unsigned long kaddr);
 #endif
 
 #endif
