@@ -11,7 +11,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
-
+#include <linux/debugfs.h>
 #include <asm/cpufeature.h>
 #include <asm/mmu_context.h>
 #include <asm/smp.h>
@@ -427,4 +427,235 @@ void _count_vm_tlb_event(enum vm_event_item x)
 {
 	count_vm_tlb_event(x);
 }
+
+/*
+ * TLB flushing logic to alloc dynamically control the flushes and potentially reduce
+ * the need for TLBIs having to go over the ARM mesh.
+ */
+
+enum tlb_state {
+	TLB_NONE,	/* Address space has no TLBs due to recent flushes or this being a new address space */
+	TLB_LOCAL,	/* Only the current cpu has used this address space */
+	TLB_IPI,	/* Flush by sending IPIs and doing local flushes  */
+	TLB_BROADCAST	/* Use the ARM mesh hardware to broadcast invalidations */
+};
+
+/*
+ * Control over TLB flusing via TLB mode
+ *
+ * The lower 10 bits control the use of IPI to do local flushes.
+ *
+ * tlb_mode encodes a limit of the number of processors that are known to have used this address space.
+ * If more than this number of processors have used the address space then a TLBI broadcast
+ * will occur. If there are less cpus than this limit then the TLB logic will send IPIs to these
+ * processors and perform local flushes on each of them. If set to 0 (default) then no IPIs will occur.
+ *
+ * The higher bits control other aspects of TLB operations.
+ *
+ * The default operation is to always use TLBI broadcast (the common method)
+ */
+
+#define TLB_MODE_IPI_BITS 10
+#define TLB_MODE_IPI_MASK ((1 << TLB_MODE_IPI_BITS) - 1)
+
+/* Feature encoding in tlb_mode */
+#define TLB_MODE_LOCAL	(1 << TLB_MODE_IPI_BITS)	/* Use local invalidation if only the current processor has used an address space */
+#define TLB_MODE_RANGE	(1 << (TLB_MODE_IPI_BITS + 1))	/* Use TLBI range flushes */
+#define TLB_MODE_NONE	(1 << (TLB_MODE_IPI_BITS + 2))	/* If no processor has used an address space then skip flushing */
+#define TLB_MODE_USER	(1 << (TLB_MODE_IPI_BITS + 3))	/* User overrode system defaults */
+
+
+static unsigned int tlb_mode;
+
+static enum tlb_state tlbstat(struct cpumask *mask)
+{
+	unsigned int weight = cpumask_weight(mask);
+	bool present = cpumask_test_cpu(smp_processor_id(), mask);
+
+	if (weight == 0) {
+	       	/*
+		 * Unused address space or something strange is on.
+		 * TLB_MODE_NONE tells us either to ignore the
+		 * flush request or flush everything to be safe
+		 */
+
+		if (tlb_mode & TLB_MODE_NONE)
+			return TLB_NONE;
+
+		return TLB_BROADCAST;
+	}
+
+	if (weight == 1 && present && (tlb_mode & TLB_MODE_LOCAL))
+		return TLB_LOCAL;
+
+	if (weight < (tlb_mode & TLB_MODE_IPI_MASK))
+		return TLB_IPI;
+
+	return TLB_BROADCAST;
+}
+
+static inline enum tlb_state tlbstat_mm(struct mm_struct *mm)
+{
+	return tlbstat(mm_cpumask(mm));
+}
+
+static inline void flush_tlb_asid(enum tlb_state ts, unsigned long asid)
+{
+	if (ts == TLB_NONE) {
+		count_vm_tlb_event(NR_TLB_SKIPPED);
+		return;
+	}
+
+	if (ts == TLB_LOCAL) {
+		__tlbi(aside1, asid);
+		__tlbi_user(aside1, asid);
+		count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
+		return;
+	}
+
+	__tlbi(aside1is, asid);
+	__tlbi_user(aside1is, asid);
+	count_vm_tlb_event(NR_TLB_FLUSH_ALL);
+
+}
+
+static inline void flush_tlb_addr(enum tlb_state ts, struct mm_struct *mm, unsigned long uaddr)
+{
+	unsigned long addr;
+
+	if (ts == TLB_NONE)  {
+		count_vm_tlb_event(NR_TLB_SKIPPED);
+		return;
+	}
+
+	addr = __TLBI_VADDR(uaddr, ASID(mm));
+
+	if (ts == TLB_LOCAL) {
+		__tlbi(vale1, addr);
+		__tlbi_user(vale1, addr);
+		count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ONE);
+		return;
+	}
+
+	__tlbi(vale1is, addr);
+	__tlbi_user(vale1is, addr);
+	count_vm_tlb_event(NR_TLB_FLUSH_ONE);
+}
+
+static inline void flush_tlb_post(enum tlb_state ts)
+{
+	if (ts == TLB_NONE)
+		return;
+
+	if (ts == TLB_LOCAL) {
+		dsb(nsh);
+		return;
+	}
+
+	dsb(ish);
+}
+
+static inline void flush_tlb_pre(enum tlb_state ts)
+{
+	if (ts == TLB_NONE)
+		return;
+
+	if (ts == TLB_LOCAL) {
+		dsb(nshst);
+		return;
+	}
+
+	dsb(ishst);
+}
+
+static ssize_t tlb_mode_read_file(struct file *file, char __user *user_buf,
+				size_t count, loff_t *ppos)
+{
+	char buf[32];
+	unsigned int len;
+
+	len = sprintf(buf, "%d\n", tlb_mode);
+	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
+}
+
+static ssize_t tlb_mode_write_file(struct file *file,
+                 const char __user *user_buf, size_t count, loff_t *ppos)
+{
+        char buf[32];
+        ssize_t len;
+        unsigned mode;
+
+        len = min(count, sizeof(buf) - 1);
+        if (copy_from_user(buf, user_buf, len))
+                return -EFAULT;
+
+        buf[len] = '\0';
+        if (kstrtoint(buf, 0, &mode))
+                return -EINVAL;
+
+        if (mode > TLB_MODE_NONE + TLB_MODE_IPI_MASK)
+                return -EINVAL;
+
+        tlb_mode = mode | TLB_MODE_USER;
+        return count;
+}
+
+static const struct file_operations fops_tlbflush = {
+        .read = tlb_mode_read_file,
+        .write = tlb_mode_write_file,
+        .llseek = default_llseek,
+};
+
+struct dentry *arch_debugfs_dir;
+
+
+static int __init set_tlb_mode(char *str)
+{
+        u32 mode;
+
+        pr_info("tlb_mode: ");
+        if (kstrtouint(str, 0, &mode)) {
+                pr_cont("using default of %u, unable to parse %s\n",
+                        tlb_mode, str);
+                return 1;
+        }
+
+        tlb_mode = mode| TLB_MODE_USER;
+        pr_cont("%d\n", tlb_mode);
+
+        return 1;
+
+}
+__setup("tlb_mode", set_tlb_mode);
+
+static int __init create_tlb_mode(void)
+{
+	unsigned int ipi_cpus;
+
+	arch_debugfs_dir = debugfs_create_dir("arm64", NULL);
+
+        debugfs_create_file("tlb_mode", S_IRUSR | S_IWUSR,
+                            arch_debugfs_dir, NULL, &fops_tlbflush);
+
+	if (!(tlb_mode & TLB_MODE_USER)) {
+		/*
+		 * Autotune IPI cpus depending on size of system
+		 *
+		 * A system with 16 cpus will send IPIs to up to 8 cpus
+		 * A system with 254 cpus will send IPIs to up to 16 cpus
+		 */
+		ipi_cpus = ilog2(nr_cpu_ids) * 2;
+
+		if (ipi_cpus > (tlb_mode & TLB_MODE_IPI_MASK)) {
+
+			tlb_mode = ipi_cpus | (tlb_mode & (TLB_MODE_NONE|TLB_MODE_LOCAL));
+
+		}
+
+		if (system_supports_tlb_range())
+			tlb_mode |= TLB_MODE_RANGE;
+	}
+        return 0;
+}
+late_initcall(create_tlb_mode);
 
