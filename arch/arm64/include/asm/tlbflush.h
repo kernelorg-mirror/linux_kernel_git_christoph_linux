@@ -393,42 +393,10 @@ do {									\
 #define __flush_s2_tlb_range_op(op, start, pages, stride, tlb_level) \
 	__flush_tlb_range_op(op, start, pages, stride, 0, tlb_level, false)
 
-static inline void __flush_tlb_range(struct vm_area_struct *vma,
+void __flush_tlb_range(struct vm_area_struct *vma,
 				     unsigned long start, unsigned long end,
 				     unsigned long stride, bool last_level,
-				     int tlb_level)
-{
-	unsigned long asid, pages;
-
-	start = round_down(start, stride);
-	end = round_up(end, stride);
-	pages = (end - start) >> PAGE_SHIFT;
-
-	/*
-	 * When not uses TLB range ops, we can handle up to
-	 * (MAX_DVM_OPS - 1) pages;
-	 * When uses TLB range ops, we can handle up to
-	 * (MAX_TLBI_RANGE_PAGES - 1) pages.
-	 */
-	if ((!system_supports_tlb_range() &&
-	     (end - start) >= (MAX_DVM_OPS * stride)) ||
-	    pages >= MAX_TLBI_RANGE_PAGES) {
-		flush_tlb_mm(vma->vm_mm);
-		return;
-	}
-
-	dsb(ishst);
-	asid = ASID(vma->vm_mm);
-
-	if (last_level)
-		__flush_tlb_range_op(vale1is, start, pages, stride, asid, tlb_level, true);
-	else
-		__flush_tlb_range_op(vae1is, start, pages, stride, asid, tlb_level, true);
-
-	dsb(ish);
-	mmu_notifier_arch_invalidate_secondary_tlbs(vma->vm_mm, start, end);
-	_count_vm_tlb_event(NR_TLB_FLUSH_RANGE);
-}
+				     int tlb_level);
 
 static inline void flush_tlb_range(struct vm_area_struct *vma,
 				   unsigned long start, unsigned long end)

@@ -643,6 +643,98 @@ void __tlbbatch_flush(void)
 	flush_tlb_post(TLB_BROADCAST);
 }
 
+struct ipi_flush_tlb_range_param {
+	unsigned long start;
+	unsigned long pages;
+	unsigned long stride;
+	bool last_level;
+	int tlb_level;
+	unsigned long asid;
+};
+
+static inline void ipi_flush_tlb_range(void *p)
+{
+	struct ipi_flush_tlb_range_param *i = p;
+
+	flush_tlb_pre(TLB_LOCAL);
+
+	if (i->last_level)
+
+		__flush_tlb_range_op(vale1, i->start, i->pages, i->stride, i->asid, i->tlb_level, true);
+
+	else
+
+		__flush_tlb_range_op(vae1, i->start, i->pages, i->stride, i->asid, i->tlb_level, true);
+
+	flush_tlb_post(TLB_LOCAL);
+	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH_RECEIVED);
+}
+
+void __flush_tlb_range(struct vm_area_struct *vma,
+		unsigned long start, unsigned long end,
+		unsigned long stride, bool last_level,
+		int tlb_level)
+{
+	struct ipi_flush_tlb_range_param i = { 0,0, stride, last_level, tlb_level, ASID(vma->vm_mm) };
+	enum tlb_state ts = tlbstat_mm(vma->vm_mm);
+
+	if (ts == TLB_NONE) {
+		count_vm_tlb_event(NR_TLB_SKIPPED);
+		goto out;
+	}
+
+	i.start = round_down(start, stride);
+	end = round_up(end, stride);
+	i.pages = (end - start) >> PAGE_SHIFT;
+
+	/*
+	 * When not using TLB range ops, we can handle up to
+	 * (MAX_DVM_OPS - 1) pages;
+	 * When uses TLB range ops, we can handle up to
+	 * (MAX_TLBI_RANGE_PAGES - 1) pages.
+	 */
+	if (((tlb_mode & TLB_MODE_RANGE) && (end - i.start) >= (MAX_DVM_OPS * stride)) ||
+			i.pages >= MAX_TLBI_RANGE_PAGES) {
+
+		flush_tlb_mm(vma->vm_mm);
+		return;
+
+	}
+
+	if (ts == TLB_IPI) {
+
+		on_each_cpu_mask(mm_cpumask(vma->vm_mm), ipi_flush_tlb_range, &i, true);
+		count_vm_tlb_event(NR_TLB_REMOTE_FLUSH);
+
+	} else {
+
+		flush_tlb_pre(ts);
+
+		if (last_level) {
+			if (ts == TLB_LOCAL) {
+				__flush_tlb_range_op(vale1, i.start, i.pages, i.stride, i.asid, i.tlb_level, true);
+				count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_RANGE);
+			} else {
+				__flush_tlb_range_op(vale1is, i.start, i.pages, i.stride, i.asid, i.tlb_level, true);
+				count_vm_tlb_event(NR_TLB_FLUSH_RANGE);
+			}
+
+		} else {
+			if (ts == TLB_LOCAL) {
+				__flush_tlb_range_op(vae1, i.start, i.pages, i.stride, i.asid, i.tlb_level, true);
+				count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_RANGE);
+			} else {
+				__flush_tlb_range_op(vae1is, i.start, i.pages, i.stride, i.asid, i.tlb_level, true);
+				count_vm_tlb_event(NR_TLB_FLUSH_RANGE);
+			}
+		}
+
+		flush_tlb_post(ts);
+	}
+out:
+	mmu_notifier_arch_invalidate_secondary_tlbs(vma->vm_mm, start, end);
+}
+
 static ssize_t tlb_mode_read_file(struct file *file, char __user *user_buf,
 				size_t count, loff_t *ppos)
 {
