@@ -598,6 +598,51 @@ void flush_tlb_mm(struct mm_struct *mm)
 	mmu_notifier_arch_invalidate_secondary_tlbs(mm, 0, -1UL);
 }
 
+struct ipi_flush_tlb_page_param {
+	unsigned long uaddr;
+	struct mm_struct *mm;
+};
+
+static inline void ipi_flush_tlb_page(void *p)
+{
+	struct ipi_flush_tlb_page_param *i = p;
+
+	flush_tlb_pre(TLB_LOCAL);
+	flush_tlb_addr(TLB_LOCAL, i->mm, i->uaddr);
+	flush_tlb_post(TLB_LOCAL);
+	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH_RECEIVED);
+}
+
+void __flush_tlb_page(struct mm_struct *mm,
+				  unsigned long uaddr, bool sync)
+{
+	struct ipi_flush_tlb_page_param i = { uaddr, mm };
+	enum tlb_state ts = tlbstat_mm(i.mm);
+
+	if (ts == TLB_IPI) {
+
+		on_each_cpu_mask(mm_cpumask(i.mm), ipi_flush_tlb_page, &i, true);
+		count_vm_tlb_event(NR_TLB_REMOTE_FLUSH);
+
+	} else {
+
+		flush_tlb_pre(ts);
+		flush_tlb_addr(ts, i.mm, uaddr);
+
+		if (sync)
+			flush_tlb_post(ts);
+
+	}
+
+	mmu_notifier_arch_invalidate_secondary_tlbs(i.mm, uaddr & PAGE_MASK,
+						(uaddr & PAGE_MASK) + PAGE_SIZE);
+}
+
+void __tlbbatch_flush(void)
+{
+	flush_tlb_post(TLB_BROADCAST);
+}
+
 static ssize_t tlb_mode_read_file(struct file *file, char __user *user_buf,
 				size_t count, loff_t *ppos)
 {

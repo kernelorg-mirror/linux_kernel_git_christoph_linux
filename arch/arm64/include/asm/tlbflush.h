@@ -250,20 +250,21 @@ static inline void flush_tlb_all(void)
 	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
 }
 
-extern void flush_tlb_mm(struct mm_struct *mm);
+void flush_tlb_mm(struct mm_struct *mm);
+
+void __flush_tlb_page(struct mm_struct *mm,
+				unsigned long uaddr, bool sync);
+
+static inline void flush_tlb_page(struct vm_area_struct *vma,
+				unsigned long uaddr)
+{
+	__flush_tlb_page(vma->vm_mm, uaddr, true);
+}
 
 static inline void __flush_tlb_page_nosync(struct mm_struct *mm,
 					   unsigned long uaddr)
 {
-	unsigned long addr;
-
-	dsb(ishst);
-	addr = __TLBI_VADDR(uaddr, ASID(mm));
-	__tlbi(vale1is, addr);
-	__tlbi_user(vale1is, addr);
-	mmu_notifier_arch_invalidate_secondary_tlbs(mm, uaddr & PAGE_MASK,
-						(uaddr & PAGE_MASK) + PAGE_SIZE);
-	_count_vm_tlb_event(NR_TLB_FLUSH_ONE);
+	__flush_tlb_page(mm, uaddr, false);
 }
 
 static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
@@ -272,12 +273,6 @@ static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
 	return __flush_tlb_page_nosync(vma->vm_mm, uaddr);
 }
 
-static inline void flush_tlb_page(struct vm_area_struct *vma,
-				  unsigned long uaddr)
-{
-	flush_tlb_page_nosync(vma, uaddr);
-	dsb(ish);
-}
 
 static inline bool arch_tlbbatch_should_defer(struct mm_struct *mm)
 {
@@ -293,6 +288,8 @@ static inline bool arch_tlbbatch_should_defer(struct mm_struct *mm)
 	return true;
 }
 
+void __tlbbatch_flush(void);
+
 static inline void arch_tlbbatch_add_pending(struct arch_tlbflush_unmap_batch *batch,
 					     struct mm_struct *mm,
 					     unsigned long uaddr)
@@ -307,7 +304,7 @@ static inline void arch_tlbbatch_add_pending(struct arch_tlbflush_unmap_batch *b
  */
 static inline void arch_flush_tlb_batched_pending(struct mm_struct *mm)
 {
-	dsb(ish);
+	__tlbbatch_flush();
 }
 
 /*
@@ -322,7 +319,7 @@ static inline void arch_flush_tlb_batched_pending(struct mm_struct *mm)
  */
 static inline void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch)
 {
-	dsb(ish);
+	__tlbbatch_flush();
 }
 
 /*
