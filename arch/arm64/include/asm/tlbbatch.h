@@ -3,10 +3,11 @@
 #define _ARCH_ARM64_TLBBATCH_H
 
 struct arch_tlbflush_unmap_batch {
-	/*
-	 * For arm64, HW can do tlb shootdown, so we don't
-	 * need to record cpumask for sending IPI
-	 */
+        /*
+         * Each bit set is a CPU that potentially has a TLB entry for one of
+         * the PFNs being flushed..
+         */
+        struct cpumask cpumask;
 };
 
 #endif /* _ARCH_ARM64_TLBBATCH_H */

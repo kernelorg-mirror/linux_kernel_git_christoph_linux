@@ -369,6 +369,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 
 	init_bootcpu_ops();
 	smp_init_cpus();
+	cpumask_set_cpu(smp_processor_id(), mm_cpumask(&init_mm));
 	smp_build_mpidr_hash();
 
 	/* Init percpu seeds for random tags after cpus are set up. */
