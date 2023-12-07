@@ -17,10 +17,6 @@
 #include <asm/cputype.h>
 #include <asm/mmu.h>
 
-/* vmstat.h cannot be include here. We will remove this soon */
-#include <linux/vm_event_item.h>
-extern void _count_vm_tlb_event(enum vm_event_item);
-
 /*
  * Raw TLBI operations.
  *

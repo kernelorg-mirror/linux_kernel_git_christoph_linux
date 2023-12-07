@@ -423,11 +423,6 @@ static int asids_init(void)
 }
 early_initcall(asids_init);
 
-void _count_vm_tlb_event(enum vm_event_item x)
-{
-	count_vm_tlb_event(x);
-}
-
 /*
  * TLB flushing logic to alloc dynamically control the flushes and potentially reduce
  * the need for TLBIs having to go over the ARM mesh.
