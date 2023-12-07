@@ -420,3 +420,9 @@ static int asids_init(void)
 	return 0;
 }
 early_initcall(asids_init);
+
+void _count_vm_tlb_event(enum vm_event_item x)
+{
+	count_vm_tlb_event(x);
+}
+

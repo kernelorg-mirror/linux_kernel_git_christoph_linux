@@ -17,6 +17,10 @@
 #include <asm/cputype.h>
 #include <asm/mmu.h>
 
+/* vmstat.h cannot be include here. We will remove this soon */
+#include <linux/vm_event_item.h>
+extern void _count_vm_tlb_event(enum vm_event_item);
+
 /*
  * Raw TLBI operations.
  *
@@ -234,6 +238,7 @@ static inline void local_flush_tlb_all(void)
 	__tlbi(vmalle1);
 	dsb(nsh);
 	isb();
+	_count_vm_tlb_event(NR_TLB_LOCAL_FLUSH_ALL);
 }
 
 static inline void flush_tlb_all(void)
@@ -242,6 +247,7 @@ static inline void flush_tlb_all(void)
 	__tlbi(vmalle1is);
 	dsb(ish);
 	isb();
+	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
 }
 
 static inline void flush_tlb_mm(struct mm_struct *mm)
@@ -254,6 +260,7 @@ static inline void flush_tlb_mm(struct mm_struct *mm)
 	__tlbi_user(aside1is, asid);
 	dsb(ish);
 	mmu_notifier_arch_invalidate_secondary_tlbs(mm, 0, -1UL);
+	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
 }
 
 static inline void __flush_tlb_page_nosync(struct mm_struct *mm,
@@ -267,6 +274,7 @@ static inline void __flush_tlb_page_nosync(struct mm_struct *mm,
 	__tlbi_user(vale1is, addr);
 	mmu_notifier_arch_invalidate_secondary_tlbs(mm, uaddr & PAGE_MASK,
 						(uaddr & PAGE_MASK) + PAGE_SIZE);
+	_count_vm_tlb_event(NR_TLB_FLUSH_ONE);
 }
 
 static inline void flush_tlb_page_nosync(struct vm_area_struct *vma,
@@ -433,6 +441,7 @@ static inline void __flush_tlb_range(struct vm_area_struct *vma,
 
 	dsb(ish);
 	mmu_notifier_arch_invalidate_secondary_tlbs(vma->vm_mm, start, end);
+	_count_vm_tlb_event(NR_TLB_FLUSH_RANGE);
 }
 
 static inline void flush_tlb_range(struct vm_area_struct *vma,

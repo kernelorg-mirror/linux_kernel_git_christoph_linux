@@ -1385,7 +1385,12 @@ const char * const vmstat_text[] = {
 	"nr_tlb_remote_flush",
 	"nr_tlb_remote_flush_received",
 	"nr_tlb_local_flush_all",
+	"nr_tlb_local_flush_range",
 	"nr_tlb_local_flush_one",
+	"nr_tlb_flush_all",
+	"nr_tlb_flush_range",
+	"nr_tlb_flush_one",
+	"nr_tlb_skipped",
 #endif /* CONFIG_DEBUG_TLBFLUSH */
 
 #ifdef CONFIG_SWAP
