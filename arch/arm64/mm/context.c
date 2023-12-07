@@ -568,6 +568,36 @@ static inline void flush_tlb_pre(enum tlb_state ts)
 	dsb(ishst);
 }
 
+static void ipi_flush_tlb_asid(void *p)
+{
+	unsigned long asid = (unsigned long)p;
+
+	flush_tlb_pre(TLB_LOCAL);
+	flush_tlb_asid(TLB_LOCAL, asid);
+	flush_tlb_post(TLB_LOCAL);
+	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH_RECEIVED);
+}
+
+void flush_tlb_mm(struct mm_struct *mm)
+{
+	unsigned long asid = __TLBI_VADDR(0, ASID(mm));
+	enum tlb_state ts = tlbstat_mm(mm);
+
+	if (ts == TLB_IPI) {
+
+		on_each_cpu_mask(mm_cpumask(mm), ipi_flush_tlb_asid, (void *)asid, true);
+		count_vm_tlb_event(NR_TLB_REMOTE_FLUSH);
+
+	} else {
+
+		flush_tlb_pre(ts);
+		flush_tlb_asid(ts, asid);
+		flush_tlb_post(ts);
+
+	}
+	mmu_notifier_arch_invalidate_secondary_tlbs(mm, 0, -1UL);
+}
+
 static ssize_t tlb_mode_read_file(struct file *file, char __user *user_buf,
 				size_t count, loff_t *ppos)
 {

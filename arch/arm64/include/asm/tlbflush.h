@@ -250,18 +250,7 @@ static inline void flush_tlb_all(void)
 	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
 }
 
-static inline void flush_tlb_mm(struct mm_struct *mm)
-{
-	unsigned long asid;
-
-	dsb(ishst);
-	asid = __TLBI_VADDR(0, ASID(mm));
-	__tlbi(aside1is, asid);
-	__tlbi_user(aside1is, asid);
-	dsb(ish);
-	mmu_notifier_arch_invalidate_secondary_tlbs(mm, 0, -1UL);
-	_count_vm_tlb_event(NR_TLB_FLUSH_ALL);
-}
+extern void flush_tlb_mm(struct mm_struct *mm);
 
 static inline void __flush_tlb_page_nosync(struct mm_struct *mm,
 					   unsigned long uaddr)
